@@ -6,58 +6,66 @@
     <title>Notice Board Display</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
-            background: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif;
-            overflow: hidden; width: 100vw; height: 100vh; position: relative;
-        }
+        body { background: #000; color: #fff; font-family: system-ui, sans-serif; overflow: hidden; width: 100vw; height: 100vh; }
         #display-container { position: relative; width: 100%; height: 100%; }
         
         .slide { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            opacity: 0; transition: opacity 1.2s ease-in-out;
+            opacity: 0; transition: opacity 1.5s ease-in-out;
             display: flex; align-items: center; justify-content: center;
             background-size: contain; background-position: center; background-repeat: no-repeat;
+            z-index: 1;
         }
-        .slide.active { opacity: 1; }
+        .slide.active { opacity: 1; z-index: 2; }
 
         .notice-card {
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
             padding: 4rem; border-radius: 2rem; box-shadow: 0 20px 50px rgba(0,0,0,0.6);
             text-align: center; width: 85%; max-width: 1400px;
         }
-        .notice-card h1 { font-size: 4.5rem; margin-bottom: 1.5rem; color: #ffdd00; line-height: 1.2; }
-        .notice-card p { font-size: 2.8rem; line-height: 1.4; color: #ffffff; }
+        .notice-card h1 { font-size: 4.5rem; margin-bottom: 1.5rem; color: #ffdd00; }
+        .notice-card p { font-size: 2.8rem; line-height: 1.4; }
 
-        .default-screen {
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            height: 100%; text-align: center; padding: 2rem;
-        }
+        .default-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; }
         .default-screen h1 { font-size: 4.5rem; color: #3b82f6; margin-bottom: 1rem; }
-        .default-screen p { font-size: 2.2rem; color: #9ca3af; }
 
-        video.slide-video {
-            width: 100%; height: 100%; object-fit: contain;
+        video.slide-video { width: 100%; height: 100%; object-fit: contain; }
+        #keepAliveCanvas, #keepAliveVideo { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+        /* The Button that forces the TV to stay awake */
+        #start-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 9999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
         }
-
-        /* Hidden elements for Wake Lock video hack */
-        #keepAliveCanvas, #keepAliveVideo {
-            position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none;
+        #start-button {
+            padding: 20px 50px; font-size: 2.5rem; background: #1877f2; color: white;
+            border: none; border-radius: 15px; cursor: pointer; box-shadow: 0 10px 30px rgba(24,119,242,0.5);
         }
     </style>
 </head>
 <body>
-    <div id="display-container"></div>
+    <!-- Wake Lock Authorization Button -->
+    <div id="start-overlay">
+        <h2 style="margin-bottom: 30px; font-size: 3rem;">Notice Board Ready</h2>
+        <button id="start-button">Press Center Button on Remote to Start</button>
+    </div>
 
+    <div id="display-container"></div>
     <canvas id="keepAliveCanvas" width="10" height="10"></canvas>
     <video id="keepAliveVideo" autoplay muted loop playsinline></video>
 
     <script>
-        // Dual-Layer Wake Lock
-        async function enableWakeLock() {
-            try {
-                if ('wakeLock' in navigator) await navigator.wakeLock.request('screen');
-            } catch (e) {}
+        const overlay = document.getElementById('start-overlay');
+        const startBtn = document.getElementById('start-button');
+        const container = document.getElementById('display-container');
+        let notices = [];
+        let currentIndex = -1;
+        let loopTimer = null;
 
+        // Force Wake Lock (Requires user click)
+        async function enableWakeLock() {
+            try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
             const canvas = document.getElementById('keepAliveCanvas');
             const ctx = canvas.getContext('2d');
             const video = document.getElementById('keepAliveVideo');
@@ -68,100 +76,92 @@
                 setTimeout(tick, 1000);
             }
             tick();
-
-            try {
-                video.srcObject = canvas.captureStream(1);
-                await video.play();
-            } catch (e) {}
+            try { video.srcObject = canvas.captureStream(1); await video.play(); } catch (e) {}
         }
 
-        const container = document.getElementById('display-container');
-        let notices = [];
-        let currentIndex = 0;
-        let slideTimer = null;
+        // Start everything ONLY when the remote is clicked
+        startBtn.addEventListener('click', () => {
+            enableWakeLock();
+            overlay.style.display = 'none';
+            backgroundPoll();
+        });
 
-        async function fetchNotices() {
+        // Silently check for new files in the background without refreshing the page
+        async function backgroundPoll() {
             try {
                 const res = await fetch('/api/notices?t=' + Date.now());
                 const data = await res.json();
-                if (Array.isArray(data)) notices = data;
-            } catch (e) {
-                // Keep playing cached notices on Wi-Fi drop
-            }
+                
+                // If the data changed, update our list
+                if (JSON.stringify(notices) !== JSON.stringify(data)) {
+                    notices = data;
+                    if (notices.length === 1) {
+                        // If only 1 image, render it once and stop looping
+                        clearTimeout(loopTimer);
+                        renderSingle(0);
+                    } else if (notices.length > 1) {
+                        // If multiple, start crossfade loop
+                        if (currentIndex === -1 || currentIndex >= notices.length) currentIndex = 0;
+                        playLoop();
+                    } else {
+                        // Empty
+                        container.innerHTML = `<div class="default-screen"><h1>School Digital Notice Board</h1></div>`;
+                    }
+                }
+            } catch (e) {}
+            
+            // Check again in 3 seconds silently
+            setTimeout(backgroundPoll, 3000);
         }
 
-        async function playNext() {
-            clearTimeout(slideTimer);
-
-            // Periodically refresh list
-            if (currentIndex === 0 || notices.length === 0) {
-                await fetchNotices();
+        function createSlide(item) {
+            const slide = document.createElement('div');
+            slide.className = 'slide';
+            if (item.type === 'image') {
+                slide.style.backgroundImage = `url('${item.url}')`;
+            } else if (item.type === 'video') {
+                const video = document.createElement('video');
+                video.className = 'slide-video'; video.src = item.url; video.autoplay = true; video.muted = true;
+                slide.appendChild(video);
+            } else {
+                slide.innerHTML = `<div class="notice-card"><h1>Announcement</h1><p>${item.content}</p></div>`;
             }
+            return slide;
+        }
 
+        function renderSingle(index) {
             container.innerHTML = '';
+            const slide = createSlide(notices[index]);
+            slide.classList.add('active');
+            container.appendChild(slide);
+        }
 
-            if (notices.length === 0) {
-                container.innerHTML = `
-                    <div class="default-screen">
-                        <h1>School Digital Notice Board</h1>
-                        <p>Waiting for new announcements...</p>
-                    </div>`;
-                slideTimer = setTimeout(playNext, 5000);
-                return;
-            }
+        function playLoop() {
+            if (notices.length <= 1) return;
+            clearTimeout(loopTimer);
 
             if (currentIndex >= notices.length) currentIndex = 0;
             const item = notices[currentIndex];
-            const slide = document.createElement('div');
-            slide.className = 'slide active';
+            const slide = createSlide(item);
+            container.appendChild(slide);
 
+            // Smooth crossfade transition
+            setTimeout(() => { slide.classList.add('active'); }, 50);
+
+            // Cleanup old slides so memory doesn't crash
+            const oldSlides = container.querySelectorAll('.slide:not(:last-child)');
+            setTimeout(() => { oldSlides.forEach(s => s.remove()); }, 1600);
+
+            // Move to next
             let duration = item.duration || 10000;
-
-            if (item.type === 'image') {
-                slide.style.backgroundImage = `url('${item.url}')`;
-                container.appendChild(slide);
-                slideTimer = setTimeout(() => {
-                    currentIndex = (currentIndex + 1) % notices.length;
-                    playNext();
-                }, duration);
-            } else if (item.type === 'video') {
-                const video = document.createElement('video');
-                video.className = 'slide-video';
-                video.src = item.url;
-                video.autoplay = true;
-                video.muted = true;
-                video.playsInline = true;
-                slide.appendChild(video);
-                container.appendChild(slide);
-
-                video.onended = () => {
-                    currentIndex = (currentIndex + 1) % notices.length;
-                    playNext();
-                };
-                // Fallback timeout in case video fails to fire onended
-                slideTimer = setTimeout(() => {
-                    currentIndex = (currentIndex + 1) % notices.length;
-                    playNext();
-                }, duration + 5000);
+            if (item.type === 'video') {
+                const video = slide.querySelector('video');
+                video.onended = () => { currentIndex++; playLoop(); };
+                loopTimer = setTimeout(() => { currentIndex++; playLoop(); }, duration + 5000);
             } else {
-                slide.innerHTML = `
-                    <div class="notice-card">
-                        <h1>Announcement</h1>
-                        <p>${item.content}</p>
-                    </div>`;
-                container.appendChild(slide);
-                slideTimer = setTimeout(() => {
-                    currentIndex = (currentIndex + 1) % notices.length;
-                    playNext();
-                }, duration);
+                loopTimer = setTimeout(() => { currentIndex++; playLoop(); }, duration);
             }
         }
-
-        window.onload = () => {
-            enableWakeLock();
-            document.body.addEventListener('click', enableWakeLock, { once: true });
-            playNext();
-        };
     </script>
 </body>
 </html>
