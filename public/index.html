@@ -6,7 +6,6 @@
     <title>Notice Board Display</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        /* Background is pure black and sits on top of the hidden video */
         body { background: #000; color: #fff; font-family: system-ui, sans-serif; overflow: hidden; width: 100vw; height: 100vh; position: relative; z-index: 0; }
         #display-container { position: relative; width: 100%; height: 100%; z-index: 10; background: #000; }
         
@@ -32,7 +31,6 @@
 
         video.slide-video { width: 100%; height: 100%; object-fit: contain; }
         
-        /* THE FIX: Video is now "visible" (opacity 0.1) but hidden BEHIND the black background (z-index -100) */
         #keepAliveCanvas, #keepAliveVideo { 
             position: fixed; top: 50%; left: 50%; width: 50px; height: 50px; 
             opacity: 0.1; z-index: -100; pointer-events: none; 
@@ -57,7 +55,6 @@
 
     <div id="display-container"></div>
     
-    <!-- Hidden Elements for Wake Lock -->
     <canvas id="keepAliveCanvas" width="10" height="10"></canvas>
     <video id="keepAliveVideo" autoplay playsinline></video>
 
@@ -68,7 +65,7 @@
         let currentIndex = -1;
         let loopTimer = null;
 
-        // Hardware Audio/Video Lock with Anti-Optimization
+        // Force Wake Lock (Canvas / Video)
         async function enableWakeLock() {
             try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
             
@@ -76,26 +73,24 @@
             const ctx = canvas.getContext('2d');
             const video = document.getElementById('keepAliveVideo');
 
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            const audioCtx = new AudioContext();
-            const oscillator = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            
-            // THE FIX: Set volume to 1%. It is functionally silent, but the OS registers active audio.
-            gainNode.gain.value = 0.01; 
-            oscillator.connect(gainNode);
-            const audioDestination = audioCtx.createMediaStreamDestination();
-            gainNode.connect(audioDestination);
-            oscillator.start();
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                const audioCtx = new AudioContext();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = 0.01; 
+                oscillator.connect(gainNode);
+                const audioDestination = audioCtx.createMediaStreamDestination();
+                gainNode.connect(audioDestination);
+                oscillator.start();
 
-            function tick() {
-                ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 10, 10);
-                ctx.fillStyle = Math.random() > 0.5 ? '#111' : '#000'; ctx.fillRect(0, 0, 1, 1);
-                setTimeout(tick, 1000);
-            }
-            tick();
+                function tick() {
+                    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 10, 10);
+                    ctx.fillStyle = Math.random() > 0.5 ? '#111' : '#000'; ctx.fillRect(0, 0, 1, 1);
+                    setTimeout(tick, 1000);
+                }
+                tick();
 
-            try { 
                 const canvasStream = canvas.captureStream(1);
                 canvasStream.addTrack(audioDestination.stream.getAudioTracks()[0]);
                 video.srcObject = canvasStream; 
@@ -103,17 +98,40 @@
             } catch (e) {}
         }
 
+        // The 13-Minute Hard Reset to trick the TV OS
+        function scheduleOSReset() {
+            setTimeout(() => {
+                window.location.reload();
+            }, 13 * 60 * 1000); // 13 minutes
+        }
+
         function startNoticeBoard() {
             if (overlay.style.display === 'none') return;
+            
+            // Save the active state so the TV auto-starts upon the 13-minute refresh
+            sessionStorage.setItem('boardActive', 'true'); 
+            
             enableWakeLock();
             overlay.style.display = 'none';
             backgroundPoll();
+            scheduleOSReset();
         }
 
+        // Event Listeners for the initial manual start
         overlay.addEventListener('click', startNoticeBoard);
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.keyCode === 13) startNoticeBoard();
         });
+
+        // AUTO-START LOGIC: If the page just refreshed itself, skip the start button
+        window.onload = () => {
+            if (sessionStorage.getItem('boardActive') === 'true') {
+                overlay.style.display = 'none';
+                enableWakeLock();
+                backgroundPoll();
+                scheduleOSReset();
+            }
+        };
 
         async function backgroundPoll() {
             try {
