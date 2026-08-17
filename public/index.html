@@ -57,13 +57,12 @@
 
     <script>
         const overlay = document.getElementById('start-overlay');
-        const startBtn = document.getElementById('start-button');
         const container = document.getElementById('display-container');
         let notices = [];
         let currentIndex = -1;
         let loopTimer = null;
 
-        // Force Wake Lock (Requires user click)
+        // Force Wake Lock (Requires user interaction)
         async function enableWakeLock() {
             try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
             const canvas = document.getElementById('keepAliveCanvas');
@@ -79,38 +78,44 @@
             try { video.srcObject = canvas.captureStream(1); await video.play(); } catch (e) {}
         }
 
-        // Start everything ONLY when the remote is clicked
-        startBtn.addEventListener('click', () => {
+        // The Master Start Function
+        function startNoticeBoard() {
+            if (overlay.style.display === 'none') return; // Prevent double-triggering
             enableWakeLock();
             overlay.style.display = 'none';
             backgroundPoll();
+        }
+
+        // FIX 1: Clicking literally anywhere on the dark overlay starts it
+        overlay.addEventListener('click', startNoticeBoard);
+
+        // FIX 2: Pressing the Center button (Enter) on the remote starts it instantly
+        document.addEventListener('keydown', (e) => {
+            // keyCode 13 is the standard "Enter/Select" button on Fire TV remotes
+            if (e.key === 'Enter' || e.keyCode === 13) {
+                startNoticeBoard();
+            }
         });
 
-        // Silently check for new files in the background without refreshing the page
+        // Silently check for new files in the background
         async function backgroundPoll() {
             try {
                 const res = await fetch('/api/notices?t=' + Date.now());
                 const data = await res.json();
                 
-                // If the data changed, update our list
                 if (JSON.stringify(notices) !== JSON.stringify(data)) {
                     notices = data;
                     if (notices.length === 1) {
-                        // If only 1 image, render it once and stop looping
                         clearTimeout(loopTimer);
                         renderSingle(0);
                     } else if (notices.length > 1) {
-                        // If multiple, start crossfade loop
                         if (currentIndex === -1 || currentIndex >= notices.length) currentIndex = 0;
                         playLoop();
                     } else {
-                        // Empty
                         container.innerHTML = `<div class="default-screen"><h1>School Digital Notice Board</h1></div>`;
                     }
                 }
             } catch (e) {}
-            
-            // Check again in 3 seconds silently
             setTimeout(backgroundPoll, 3000);
         }
 
@@ -145,14 +150,10 @@
             const slide = createSlide(item);
             container.appendChild(slide);
 
-            // Smooth crossfade transition
             setTimeout(() => { slide.classList.add('active'); }, 50);
-
-            // Cleanup old slides so memory doesn't crash
             const oldSlides = container.querySelectorAll('.slide:not(:last-child)');
             setTimeout(() => { oldSlides.forEach(s => s.remove()); }, 1600);
 
-            // Move to next
             let duration = item.duration || 10000;
             if (item.type === 'video') {
                 const video = slide.querySelector('video');
