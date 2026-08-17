@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notice Board Display</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            background: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif;
+            overflow: hidden; width: 100vw; height: 100vh; position: relative;
+        }
+        #display-container { position: relative; width: 100%; height: 100%; }
+        
+        .slide { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            opacity: 0; transition: opacity 1.2s ease-in-out;
+            display: flex; align-items: center; justify-content: center;
+            background-size: contain; background-position: center; background-repeat: no-repeat;
+        }
+        .slide.active { opacity: 1; }
+
+        .notice-card {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            padding: 4rem; border-radius: 2rem; box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            text-align: center; width: 85%; max-width: 1400px;
+        }
+        .notice-card h1 { font-size: 4.5rem; margin-bottom: 1.5rem; color: #ffdd00; line-height: 1.2; }
+        .notice-card p { font-size: 2.8rem; line-height: 1.4; color: #ffffff; }
+
+        .default-screen {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100%; text-align: center; padding: 2rem;
+        }
+        .default-screen h1 { font-size: 4.5rem; color: #3b82f6; margin-bottom: 1rem; }
+        .default-screen p { font-size: 2.2rem; color: #9ca3af; }
+
+        video.slide-video {
+            width: 100%; height: 100%; object-fit: contain;
+        }
+
+        /* Hidden elements for Wake Lock video hack */
+        #keepAliveCanvas, #keepAliveVideo {
+            position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="display-container"></div>
+
+    <canvas id="keepAliveCanvas" width="10" height="10"></canvas>
+    <video id="keepAliveVideo" autoplay muted loop playsinline></video>
+
+    <script>
+        // Dual-Layer Wake Lock
+        async function enableWakeLock() {
+            try {
+                if ('wakeLock' in navigator) await navigator.wakeLock.request('screen');
+            } catch (e) {}
+
+            const canvas = document.getElementById('keepAliveCanvas');
+            const ctx = canvas.getContext('2d');
+            const video = document.getElementById('keepAliveVideo');
+
+            function tick() {
+                ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 10, 10);
+                ctx.fillStyle = Math.random() > 0.5 ? '#111' : '#000'; ctx.fillRect(0, 0, 1, 1);
+                setTimeout(tick, 1000);
+            }
+            tick();
+
+            try {
+                video.srcObject = canvas.captureStream(1);
+                await video.play();
+            } catch (e) {}
+        }
+
+        const container = document.getElementById('display-container');
+        let notices = [];
+        let currentIndex = 0;
+        let slideTimer = null;
+
+        async function fetchNotices() {
+            try {
+                const res = await fetch('/api/notices?t=' + Date.now());
+                const data = await res.json();
+                if (Array.isArray(data)) notices = data;
+            } catch (e) {
+                // Keep playing cached notices on Wi-Fi drop
+            }
+        }
+
+        async function playNext() {
+            clearTimeout(slideTimer);
+
+            // Periodically refresh list
+            if (currentIndex === 0 || notices.length === 0) {
+                await fetchNotices();
+            }
+
+            container.innerHTML = '';
+
+            if (notices.length === 0) {
+                container.innerHTML = `
+                    <div class="default-screen">
+                        <h1>School Digital Notice Board</h1>
+                        <p>Waiting for new announcements...</p>
+                    </div>`;
+                slideTimer = setTimeout(playNext, 5000);
+                return;
+            }
+
+            if (currentIndex >= notices.length) currentIndex = 0;
+            const item = notices[currentIndex];
+            const slide = document.createElement('div');
+            slide.className = 'slide active';
+
+            let duration = item.duration || 10000;
+
+            if (item.type === 'image') {
+                slide.style.backgroundImage = `url('${item.url}')`;
+                container.appendChild(slide);
+                slideTimer = setTimeout(() => {
+                    currentIndex = (currentIndex + 1) % notices.length;
+                    playNext();
+                }, duration);
+            } else if (item.type === 'video') {
+                const video = document.createElement('video');
+                video.className = 'slide-video';
+                video.src = item.url;
+                video.autoplay = true;
+                video.muted = true;
+                video.playsInline = true;
+                slide.appendChild(video);
+                container.appendChild(slide);
+
+                video.onended = () => {
+                    currentIndex = (currentIndex + 1) % notices.length;
+                    playNext();
+                };
+                // Fallback timeout in case video fails to fire onended
+                slideTimer = setTimeout(() => {
+                    currentIndex = (currentIndex + 1) % notices.length;
+                    playNext();
+                }, duration + 5000);
+            } else {
+                slide.innerHTML = `
+                    <div class="notice-card">
+                        <h1>Announcement</h1>
+                        <p>${item.content}</p>
+                    </div>`;
+                container.appendChild(slide);
+                slideTimer = setTimeout(() => {
+                    currentIndex = (currentIndex + 1) % notices.length;
+                    playNext();
+                }, duration);
+            }
+        }
+
+        window.onload = () => {
+            enableWakeLock();
+            document.body.addEventListener('click', enableWakeLock, { once: true });
+            playNext();
+        };
+    </script>
+</body>
+</html>
