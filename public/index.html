@@ -6,17 +6,18 @@
     <title>Notice Board Display</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: #000; color: #fff; font-family: system-ui, sans-serif; overflow: hidden; width: 100vw; height: 100vh; }
-        #display-container { position: relative; width: 100%; height: 100%; }
+        /* Background is pure black and sits on top of the hidden video */
+        body { background: #000; color: #fff; font-family: system-ui, sans-serif; overflow: hidden; width: 100vw; height: 100vh; position: relative; z-index: 0; }
+        #display-container { position: relative; width: 100%; height: 100%; z-index: 10; background: #000; }
         
         .slide { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             opacity: 0; transition: opacity 1.5s ease-in-out;
             display: flex; align-items: center; justify-content: center;
             background-size: contain; background-position: center; background-repeat: no-repeat;
-            z-index: 1;
+            z-index: 11;
         }
-        .slide.active { opacity: 1; z-index: 2; }
+        .slide.active { opacity: 1; z-index: 12; }
 
         .notice-card {
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
@@ -30,11 +31,16 @@
         .default-screen h1 { font-size: 4.5rem; color: #3b82f6; margin-bottom: 1rem; }
 
         video.slide-video { width: 100%; height: 100%; object-fit: contain; }
-        #keepAliveCanvas, #keepAliveVideo { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+        
+        /* THE FIX: Video is now "visible" (opacity 0.1) but hidden BEHIND the black background (z-index -100) */
+        #keepAliveCanvas, #keepAliveVideo { 
+            position: fixed; top: 50%; left: 50%; width: 50px; height: 50px; 
+            opacity: 0.1; z-index: -100; pointer-events: none; 
+        }
 
         #start-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9); z-index: 9999;
+            background: rgba(0,0,0,0.95); z-index: 9999;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
         }
         #start-button {
@@ -50,6 +56,8 @@
     </div>
 
     <div id="display-container"></div>
+    
+    <!-- Hidden Elements for Wake Lock -->
     <canvas id="keepAliveCanvas" width="10" height="10"></canvas>
     <video id="keepAliveVideo" autoplay playsinline></video>
 
@@ -60,7 +68,7 @@
         let currentIndex = -1;
         let loopTimer = null;
 
-        // The Hardware Audio Lock (Tricks the TV into thinking a real movie is playing)
+        // Hardware Audio/Video Lock with Anti-Optimization
         async function enableWakeLock() {
             try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
             
@@ -68,19 +76,18 @@
             const ctx = canvas.getContext('2d');
             const video = document.getElementById('keepAliveVideo');
 
-            // 1. Create a pure silence audio track
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             const audioCtx = new AudioContext();
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
             
-            gainNode.gain.value = 0; // Absolute silence
+            // THE FIX: Set volume to 1%. It is functionally silent, but the OS registers active audio.
+            gainNode.gain.value = 0.01; 
             oscillator.connect(gainNode);
             const audioDestination = audioCtx.createMediaStreamDestination();
             gainNode.connect(audioDestination);
             oscillator.start();
 
-            // 2. Create the visual video stream
             function tick() {
                 ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 10, 10);
                 ctx.fillStyle = Math.random() > 0.5 ? '#111' : '#000'; ctx.fillRect(0, 0, 1, 1);
@@ -88,7 +95,6 @@
             }
             tick();
 
-            // 3. Combine both into a real media session
             try { 
                 const canvasStream = canvas.captureStream(1);
                 canvasStream.addTrack(audioDestination.stream.getAudioTracks()[0]);
