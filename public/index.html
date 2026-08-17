@@ -32,7 +32,6 @@
         video.slide-video { width: 100%; height: 100%; object-fit: contain; }
         #keepAliveCanvas, #keepAliveVideo { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
-        /* The Button that forces the TV to stay awake */
         #start-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.9); z-index: 9999;
@@ -45,7 +44,6 @@
     </style>
 </head>
 <body>
-    <!-- Wake Lock Authorization Button -->
     <div id="start-overlay">
         <h2 style="margin-bottom: 30px; font-size: 3rem;">Notice Board Ready</h2>
         <button id="start-button">Press Center Button on Remote to Start</button>
@@ -53,7 +51,7 @@
 
     <div id="display-container"></div>
     <canvas id="keepAliveCanvas" width="10" height="10"></canvas>
-    <video id="keepAliveVideo" autoplay muted loop playsinline></video>
+    <video id="keepAliveVideo" autoplay playsinline></video>
 
     <script>
         const overlay = document.getElementById('start-overlay');
@@ -62,42 +60,55 @@
         let currentIndex = -1;
         let loopTimer = null;
 
-        // Force Wake Lock (Requires user interaction)
+        // The Hardware Audio Lock (Tricks the TV into thinking a real movie is playing)
         async function enableWakeLock() {
             try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
+            
             const canvas = document.getElementById('keepAliveCanvas');
             const ctx = canvas.getContext('2d');
             const video = document.getElementById('keepAliveVideo');
 
+            // 1. Create a pure silence audio track
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const audioCtx = new AudioContext();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            gainNode.gain.value = 0; // Absolute silence
+            oscillator.connect(gainNode);
+            const audioDestination = audioCtx.createMediaStreamDestination();
+            gainNode.connect(audioDestination);
+            oscillator.start();
+
+            // 2. Create the visual video stream
             function tick() {
                 ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 10, 10);
                 ctx.fillStyle = Math.random() > 0.5 ? '#111' : '#000'; ctx.fillRect(0, 0, 1, 1);
                 setTimeout(tick, 1000);
             }
             tick();
-            try { video.srcObject = canvas.captureStream(1); await video.play(); } catch (e) {}
+
+            // 3. Combine both into a real media session
+            try { 
+                const canvasStream = canvas.captureStream(1);
+                canvasStream.addTrack(audioDestination.stream.getAudioTracks()[0]);
+                video.srcObject = canvasStream; 
+                await video.play(); 
+            } catch (e) {}
         }
 
-        // The Master Start Function
         function startNoticeBoard() {
-            if (overlay.style.display === 'none') return; // Prevent double-triggering
+            if (overlay.style.display === 'none') return;
             enableWakeLock();
             overlay.style.display = 'none';
             backgroundPoll();
         }
 
-        // FIX 1: Clicking literally anywhere on the dark overlay starts it
         overlay.addEventListener('click', startNoticeBoard);
-
-        // FIX 2: Pressing the Center button (Enter) on the remote starts it instantly
         document.addEventListener('keydown', (e) => {
-            // keyCode 13 is the standard "Enter/Select" button on Fire TV remotes
-            if (e.key === 'Enter' || e.keyCode === 13) {
-                startNoticeBoard();
-            }
+            if (e.key === 'Enter' || e.keyCode === 13) startNoticeBoard();
         });
 
-        // Silently check for new files in the background
         async function backgroundPoll() {
             try {
                 const res = await fetch('/api/notices?t=' + Date.now());
