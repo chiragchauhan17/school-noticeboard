@@ -35,31 +35,15 @@
             position: fixed; top: 50%; left: 50%; width: 50px; height: 50px; 
             opacity: 0.1; z-index: -100; pointer-events: none; 
         }
-
-        #start-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.95); z-index: 9999;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-        }
-        #start-button {
-            padding: 20px 50px; font-size: 2.5rem; background: #1877f2; color: white;
-            border: none; border-radius: 15px; cursor: pointer; box-shadow: 0 10px 30px rgba(24,119,242,0.5);
-        }
     </style>
 </head>
 <body>
-    <div id="start-overlay">
-        <h2 style="margin-bottom: 30px; font-size: 3rem;">Notice Board Ready</h2>
-        <button id="start-button">Press Center Button on Remote to Start</button>
-    </div>
-
     <div id="display-container"></div>
     
     <canvas id="keepAliveCanvas" width="10" height="10"></canvas>
     <video id="keepAliveVideo" autoplay playsinline></video>
 
     <script>
-        const overlay = document.getElementById('start-overlay');
         const container = document.getElementById('display-container');
         let notices = [];
         let currentIndex = -1;
@@ -98,39 +82,18 @@
             } catch (e) {}
         }
 
-        // The 13-Minute Hard Reset to trick the TV OS
+        // The 13-Minute Hard Reset to clear memory/cache
         function scheduleOSReset() {
             setTimeout(() => {
                 window.location.reload();
             }, 13 * 60 * 1000); // 13 minutes
         }
 
-        function startNoticeBoard() {
-            if (overlay.style.display === 'none') return;
-            
-            // Save the active state so the TV auto-starts upon the 13-minute refresh
-            sessionStorage.setItem('boardActive', 'true'); 
-            
+        // AUTO-START LOGIC: Run instantly on page load
+        window.onload = () => {
             enableWakeLock();
-            overlay.style.display = 'none';
             backgroundPoll();
             scheduleOSReset();
-        }
-
-        // Event Listeners for the initial manual start
-        overlay.addEventListener('click', startNoticeBoard);
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.keyCode === 13) startNoticeBoard();
-        });
-
-        // AUTO-START LOGIC: If the page just refreshed itself, skip the start button
-        window.onload = () => {
-            if (sessionStorage.getItem('boardActive') === 'true') {
-                overlay.style.display = 'none';
-                enableWakeLock();
-                backgroundPoll();
-                scheduleOSReset();
-            }
         };
 
         async function backgroundPoll() {
