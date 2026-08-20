@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notice Board Display</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #000; color: #fff; font-family: system-ui, sans-serif; overflow: hidden; width: 100vw; height: 100vh; position: relative; z-index: 0; }
+        #display-container { position: relative; width: 100%; height: 100%; z-index: 10; background: #000; }
+        
+        .slide { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            opacity: 0; transition: opacity 1.5s ease-in-out;
+            display: flex; align-items: center; justify-content: center;
+            background-size: contain; background-position: center; background-repeat: no-repeat;
+            z-index: 11;
+        }
+        .slide.active { opacity: 1; z-index: 12; }
+
+        .notice-card {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            padding: 4rem; border-radius: 2rem; box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            text-align: center; width: 85%; max-width: 1400px;
+        }
+        .notice-card h1 { font-size: 4.5rem; margin-bottom: 1.5rem; color: #ffdd00; }
+        .notice-card p { font-size: 2.8rem; line-height: 1.4; }
+
+        .default-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; }
+        .default-screen h1 { font-size: 4.5rem; color: #3b82f6; margin-bottom: 1rem; }
+
+        video.slide-video { width: 100%; height: 100%; object-fit: contain; }
+        
+        #keepAliveCanvas, #keepAliveVideo { 
+            position: fixed; top: 50%; left: 50%; width: 50px; height: 50px; 
+            opacity: 0.1; z-index: -100; pointer-events: none; 
+        }
+    </style>
+</head>
+<body>
+    <div id="display-container"></div>
+    
+    <canvas id="keepAliveCanvas" width="10" height="10"></canvas>
+    <video id="keepAliveVideo" autoplay playsinline></video>
+
+    <script>
+        const container = document.getElementById('display-container');
+        let notices = [];
+        let currentIndex = -1;
+        let loopTimer = null;
+
+        // Force Wake Lock (Canvas / Video)
+        async function enableWakeLock() {
+            try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
+            
+            const canvas = document.getElementById('keepAliveCanvas');
+            const ctx = canvas.getContext('2d');
+            const video = document.getElementById('keepAliveVideo');
+
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                const audioCtx = new AudioContext();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = 0.01; 
+                oscillator.connect(gainNode);
+                const audioDestination = audioCtx.createMediaStreamDestination();
+                gainNode.connect(audioDestination);
+                oscillator.start();
+
+                function tick() {
+                    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 10, 10);
+                    ctx.fillStyle = Math.random() > 0.5 ? '#111' : '#000'; ctx.fillRect(0, 0, 1, 1);
+                    setTimeout(tick, 1000);
+                }
+                tick();
+
+                const canvasStream = canvas.captureStream(1);
+                canvasStream.addTrack(audioDestination.stream.getAudioTracks()[0]);
+                video.srcObject = canvasStream; 
+                await video.play(); 
+            } catch (e) {}
+        }
+
+        // The 13-Minute Hard Reset to clear memory/cache
+        function scheduleOSReset() {
+            setTimeout(() => {
+                window.location.reload();
+            }, 13 * 60 * 1000); // 13 minutes
+        }
+
+        // AUTO-START LOGIC: Run instantly on page load
+        window.onload = () => {
+            enableWakeLock();
+            backgroundPoll();
+            scheduleOSReset();
+        };
+
+        async function backgroundPoll() {
+            try {
+                const res = await fetch('/api/notices?t=' + Date.now());
+                const data = await res.json();
+                
+                if (JSON.stringify(notices) !== JSON.stringify(data)) {
+                    notices = data;
+                    if (notices.length === 1) {
+                        clearTimeout(loopTimer);
+                        renderSingle(0);
+                    } else if (notices.length > 1) {
+                        if (currentIndex === -1 || currentIndex >= notices.length) currentIndex = 0;
+                        playLoop();
+                    } else {
+                        container.innerHTML = `<div class="default-screen"><h1>School Digital Notice Board</h1></div>`;
+                    }
+                }
+            } catch (e) {}
+            setTimeout(backgroundPoll, 3000);
+        }
+
+        function createSlide(item) {
+            const slide = document.createElement('div');
+            slide.className = 'slide';
+            if (item.type === 'image') {
+                slide.style.backgroundImage = `url('${item.url}')`;
+            } else if (item.type === 'video') {
+                const video = document.createElement('video');
+                video.className = 'slide-video'; video.src = item.url; video.autoplay = true; video.muted = true;
+                slide.appendChild(video);
+            } else {
+                slide.innerHTML = `<div class="notice-card"><h1>Announcement</h1><p>${item.content}</p></div>`;
+            }
+            return slide;
+        }
+
+        function renderSingle(index) {
+            container.innerHTML = '';
+            const slide = createSlide(notices[index]);
+            slide.classList.add('active');
+            container.appendChild(slide);
+        }
+
+        function playLoop() {
+            if (notices.length <= 1) return;
+            clearTimeout(loopTimer);
+
+            if (currentIndex >= notices.length) currentIndex = 0;
+            const item = notices[currentIndex];
+            const slide = createSlide(item);
+            container.appendChild(slide);
+
+            setTimeout(() => { slide.classList.add('active'); }, 50);
+            const oldSlides = container.querySelectorAll('.slide:not(:last-child)');
+            setTimeout(() => { oldSlides.forEach(s => s.remove()); }, 1600);
+
+            let duration = item.duration || 10000;
+            if (item.type === 'video') {
+                const video = slide.querySelector('video');
+                video.onended = () => { currentIndex++; playLoop(); };
+                loopTimer = setTimeout(() => { currentIndex++; playLoop(); }, duration + 5000);
+            } else {
+                loopTimer = setTimeout(() => { currentIndex++; playLoop(); }, duration);
+            }
+        }
+    </script>
+</body>
+</html>
